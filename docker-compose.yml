@@ -1,0 +1,45 @@
+services:
+    postgres:
+        image: postgres:16
+        env_file:
+            - .env
+        volumes:
+            - ./pgsql_data/:/var/lib/postgresql/data
+        environment:
+            POSTGRES_USER: ${DB_USERNAME}
+            POSTGRES_PASSWORD: ${DB_PASSWORD}
+            POSTGRES_DB: ${DB_DATABASE}
+            PGDATA: /var/lib/postgresql/data/db-files/
+        ports:
+            - "5432:5432"
+        restart: unless-stopped
+        networks:
+            - scrape_network
+
+    app:
+        build:
+            context: ./
+            dockerfile: ./Dockerfile
+        ports:
+            - "8000:80"
+        env_file:
+            - .env
+        volumes:
+            - ./:/app/
+            - ./vendor:/app/vendor
+        depends_on:
+            - postgres
+            - redis
+        networks:
+            - scrape_network
+
+    redis:
+        image: redis:latest
+        restart: always
+        ports:
+            - "6379:6379"
+        networks:
+            - scrape_network
+
+networks:
+    scrape_network:
