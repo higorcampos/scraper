@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Category;
 use Illuminate\Http\Request;
 use App\Models\Product;
 
@@ -17,8 +18,14 @@ class ProductController extends Controller
                 ->orWhere('description', 'LIKE', "%{$search}%");
         }
 
-        $products = $query->paginate(6);
+        if ($request->has('category')) {
+            $categoryId = $request->input('category');
+            $query->where('category_id', $categoryId);
+        }
 
-        return view('products.index', compact('products'));
+        $products = $query->paginate(10)->appends($request->except('page'));
+        $categories = Category::all();
+
+        return view('products.index', compact('products', 'categories'));
     }
 }
