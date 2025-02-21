@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
 use App\Mail\ScrapingCompleted;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Collection;
 
 class ScraperService
 {
@@ -34,11 +35,11 @@ class ScraperService
         } else {
             try {
                 $categories = $this->scrapeCategories();
-                $products = [];
+                $products = new Collection();
 
                 foreach ($categories as $category) {
                     $categoryProducts = $this->scrapeCategoryProducts($category['link'], $category['id']);
-                    $products = array_merge($products, $categoryProducts);
+                    $products = $products->merge($categoryProducts);
                 }
 
                 Cache::put($cacheKey, $products, $cacheTTL);
@@ -82,60 +83,70 @@ class ScraperService
 
     protected function scrapeCategoryProducts($categoryLink, $categoryId)
     {
-        $products = [];
+        $products = new Collection();
         $page = 1;
         $hasNextPage = true;
 
         while ($hasNextPage) {
-            $url = env('SCRAPER_URL_BASE') . $categoryLink;
-            if ($page > 1) {
-                $url = str_replace('index.html', 'page-' . $page . '.html', $url);
-            }
-
+            $url = $this->buildCategoryUrl($categoryLink, $page);
             $crawler = $this->scrapePage($url);
 
             $crawler->filter('.product_pod')->each(function ($node) use (&$products, $categoryId) {
-                $title = $node->filter('h3 a')->attr('title');
-                $price = str_replace('£', '', $node->filter('.price_color')->text());
-                $link = str_replace('../../../', '', $node->filter('h3 a')->attr('href'));
-                $image = str_replace('../../../../', '', $node->filter('.image_container a img')->attr('src'));
-
-                $productCrawler = $this->scrapePage(env('SCRAPER_URL_CATALOGUE') . $link);
-                $descriptionNode = $productCrawler->filter('#product_description ~ p')->first();
-                $description = $descriptionNode->count() ? $descriptionNode->text() : '';
-
-                $products[] = [
-                    'title' => $title,
-                    'price' => $price,
-                    'link' => $link,
-                    'category_id' => $categoryId,
-                    'image' => $image,
-                    'description' => $description,
-                ];
-
-                $this->productRepository->updateOrCreate([
-                    'title' => $title,
-                    'price' => $price,
-                    'link' => $link,
-                    'category_id' => $categoryId,
-                    'image' => $image,
-                    'description' => $description,
-                ]);
-
-                Log::info('Product created or updated', [
-                    'title' => $title,
-                    'price' => $price,
-                    'link' => $link,
-                    'category_id' => $categoryId,
-                    'image' => $image,
-                    'description' => $description,
-                ]);
+                $productData = $this->extractProductData($node, $categoryId);
+                if ($this->isValidProductData($productData)) {
+                    $products->push($productData);
+                }
             });
 
             $hasNextPage = $crawler->filter('.next')->count() > 0;
             $page++;
         }
 
+        $this->saveProducts($products);
+
         return $products;
+    }
+
+    protected function buildCategoryUrl($categoryLink, $page)
+    {
+        $url = env('SCRAPER_URL_BASE') . $categoryLink;
+        if ($page > 1) {
+            $url = str_replace('index.html', 'page-' . $page . '.html', $url);
+        }
+        return $url;
+    }
+
+    protected function extractProductData($node, $categoryId)
+    {
+        $title = $node->filter('h3 a')->attr('title');
+        $price = str_replace('£', '', $node->filter('.price_color')->text());
+        $link = str_replace('../../../', '', $node->filter('h3 a')->attr('href'));
+        $image = str_replace('../../../../', '', $node->filter('.image_container a img')->attr('src'));
+
+        $productCrawler = $this->scrapePage(env('SCRAPER_URL_CATALOGUE') . $link);
+        $descriptionNode = $productCrawler->filter('#product_description ~ p')->first();
+        $description = $descriptionNode->count() ? $descriptionNode->text() : '';
+
+        return [
+            'title' => $title,
+            'price' => $price,
+            'link' => $link,
+            'category_id' => $categoryId,
+            'image' => $image,
+            'description' => $description,
+        ];
+    }
+
+    protected function isValidProductData($productData)
+    {
+        return !empty($productData['title']) && !empty($productData['price']) && !empty($productData['link']);
+    }
+
+    protected function saveProducts($products)
+    {
+        $products->each(function ($productData) {
+            $this->productRepository->updateOrCreate($productData);
+            Log::info('Product created or updated', $productData);
+        });
     }
 }
